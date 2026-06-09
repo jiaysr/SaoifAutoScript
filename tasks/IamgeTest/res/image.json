@@ -1,0 +1,11 @@
+[
+  {
+    "itemName": "logo",
+    "imageName": "res_logo.png",
+    "roiFront": "19,539,89,90",
+    "roiBack": "1,485,136,187",
+    "method": "Template matching",
+    "threshold": 0.8,
+    "description": "description"
+  }
+]
