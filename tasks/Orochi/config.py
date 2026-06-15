@@ -62,7 +62,6 @@ class SwitchSoulConfig(BaseSwitchSoulConfig):
     # 虚无 config
     thirteen_switch: str = Field(default='-1,-1', description='thirteen_switch_help')
 
-
 class Orochi(ConfigBase):
     scheduler: Scheduler = Field(default_factory=Scheduler)
     orochi_config: OrochiConfig = Field(default_factory=OrochiConfig)

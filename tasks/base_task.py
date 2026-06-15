@@ -122,8 +122,8 @@ class BaseTask(GlobalGameAssets, CostumeBase):
         :return:
         """
         self.device.screenshot()
-        # 判断勾协
-        self._burst()
+        # # 判断勾协
+        # self._burst()
 
         # # 判断网络异常
         # if self.appear(self.I_NETWORK_ABNORMAL):
