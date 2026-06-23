@@ -93,9 +93,7 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
             return None, None
         
         def time_to_hit(pos, speed, target_y):
-            """
-            计算指针首次到达 target_y 所需时间，考虑 y_start~y_end 间往返运动
-            """
+            """计算指针首次到达 target_y 所需时间，考虑 y_start~y_end 间往返运动"""
             if speed > 0:
                 if target_y >= pos:
                     return (target_y - pos) / speed
@@ -107,8 +105,17 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
                 else:
                     return (pos - y_start + target_y - y_start) / abs(speed)
         
-        logger.info('开始钓鱼循环（纯预测模式）')
+        def timed_screenshot():
+            """截图并估算实际捕获时刻（用调用前后中点消除截图延迟）"""
+            t0 = time.time()
+            img = self.screenshot()
+            t1 = time.time()
+            return img, (t0 + t1) / 2
+        
+        logger.info('开始钓鱼循环（同步测速+单次校验）')
         logger.info(f'监测区域: x={x}, y={y_start}-{y_end}')
+        
+        VERIFY_LEAD = 0.25
         
         loop_count = 0
         
@@ -116,81 +123,80 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
             loop_count += 1
             logger.info(f'=== 大循环 {loop_count} ===')
             
-            # 步骤1：找完美区域
-            perfect_min = perfect_max = None
-            while perfect_min is None:
-                img = self.screenshot()
-                region = img[y_start:y_end, x]
-                p_start, p_end = find_perfect_region(region)
-                if p_start is not None:
-                    perfect_min, perfect_max = p_start, p_end
-                    perfect_center = (p_start + p_end) / 2
-                    logger.info(f'✓ 完美区域: {p_start}-{p_end}, 中心: {perfect_center:.1f}')
-                else:
-                    time.sleep(0.01)
-            
-            # 步骤2：连续采样测速（用实际时间差）
+            # === 阶段一：找完美区域 + 同步测速 ===
             samples = []
-            for _ in range(6):
-                img = self.screenshot()
-                now = time.time()
+            perfect_min = perfect_max = None
+            
+            while perfect_min is None or len(samples) < 4:
+                img, t_cap = timed_screenshot()
                 region = img[y_start:y_end, x]
+                
+                if perfect_min is None:
+                    p_start, p_end = find_perfect_region(region)
+                    if p_start is not None:
+                        perfect_min, perfect_max = p_start, p_end
+                        perfect_center = (p_start + p_end) / 2
+                        logger.info(f'✓ 完美区域: {p_start}-{p_end}, 中心: {perfect_center:.1f}')
+                
                 pos = find_needle(region)
                 if pos is not None:
-                    samples.append((pos, now))
-                    if len(samples) >= 2:
-                        break
-                time.sleep(0.03)
+                    samples.append((pos, t_cap))
+                
+                time.sleep(0.01)
             
             if len(samples) < 2:
-                logger.info('未找到指针，重试...')
+                logger.info('速度样本不足，重试...')
                 continue
             
-            # 继续采样到总跨度 >= 0.3s，保证速度精度
-            t_start = samples[0][1]
-            while len(samples) < 6:
-                now = time.time()
-                if now - t_start > 3.0:
-                    break
-                time.sleep(0.03)
-                img = self.screenshot()
-                now = time.time()
-                region = img[y_start:y_end, x]
-                pos = find_needle(region)
-                if pos is not None:
-                    samples.append((pos, now))
-            
-            # 最小二乘法拟合速度（用实际时间差）
+            # 线性拟合速度
             positions = np.array([s[0] for s in samples])
             times = np.array([s[1] for s in samples])
+            span = times[-1] - times[0]
             speed = np.polyfit(times - times[0], positions, 1)[0]
             direction = "向上" if speed < 0 else "向下"
             logger.info(f'速度: {speed:.1f} px/s ({direction}), {len(samples)} 个样本, '
-                        f'跨度 {times[-1]-times[0]:.3f}s')
+                        f'跨度 {span:.3f}s')
             
-            # 如果速度异常小（指针已停或接近停止），跳过本轮
             if abs(speed) < 10:
-                logger.info('速度异常小，等待...')
+                logger.info('速度异常小，跳过')
                 time.sleep(0.3)
                 continue
             
-            # 步骤3：计算等待时间并点击
+            # === 阶段二：粗预测 ===
             last_pos, last_time = samples[-1]
             hit_time = time_to_hit(last_pos, speed, perfect_center)
             if hit_time >= 5.0:
-                logger.info(f'预测需要 {hit_time:.2f}s，超出 5s 限制，等下次机会')
+                logger.info(f'预测 {hit_time:.2f}s 超出 5s 限制')
                 time.sleep(0.5)
                 continue
             
             elapsed = time.time() - last_time
-            wait_time = max(0, hit_time - elapsed)
-            logger.info(f'等待 {wait_time:.3f}s (pos={last_pos}, target={perfect_center:.1f})')
-            time.sleep(wait_time)
+            wait_before_verify = max(0, hit_time - elapsed - VERIFY_LEAD)
+            logger.info(f'粗等 {wait_before_verify:.3f}s (预测剩余 {hit_time-elapsed:.3f}s)')
+            time.sleep(wait_before_verify)
             
-            # 步骤4：点击
+            # === 阶段三：单次校验（失败可重试一次） ===
+            verify_pos = None
+            for retry in range(2):
+                img, t_cap = timed_screenshot()
+                region = img[y_start:y_end, x]
+                verify_pos = find_needle(region)
+                if verify_pos is not None:
+                    time_since_capture = time.time() - t_cap
+                    remaining = max(0, time_to_hit(verify_pos, speed, perfect_center) - time_since_capture)
+                    logger.info(f'校验: pos={verify_pos}, 重算剩余 {remaining:.3f}s')
+                    break
+                logger.info(f'校验未找到指针{"，重试" if retry == 0 else ""}')
+            
+            if verify_pos is None:
+                remaining = max(0, hit_time - (time.time() - last_time))
+                logger.info(f'校验均失败，原预测: 剩余 {remaining:.3f}s')
+            
+            time.sleep(remaining)
+            
+            # === 阶段四：点击 ===
             logger.info(f'>>> 点击! (1173, 510)')
             self.device.click(1173, 510)
-            
             logger.info('点击完成')
             time.sleep(0.5)
 
