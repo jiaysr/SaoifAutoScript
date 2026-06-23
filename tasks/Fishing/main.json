@@ -1,0 +1,11 @@
+[
+  {
+    "itemName": "name",
+    "roiFront": "87,5,267,43",
+    "roiBack": "363,8,100,100",
+    "mode": "Single",
+    "method": "Default",
+    "keyword": "",
+    "description": "Ocr-description"
+  }
+]

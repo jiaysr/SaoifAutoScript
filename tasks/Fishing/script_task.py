@@ -70,12 +70,11 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
         x = 1014
         y_start, y_end = 123, 522
         
-        # 指针颜色 #b4feff -> BGR(255, 254, 180)
+        # 指针颜色 #b4feff -> RGB(180, 254, 255)
         needle_color = np.array([180, 254, 255])
         needle_threshold = 20
         
         def find_needle(region):
-            """查找指针位置"""
             diff = np.abs(region.astype(np.int16) - needle_color)
             mask = np.all(diff < needle_threshold, axis=1)
             indices = np.where(mask)[0]
@@ -84,7 +83,6 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
             return None
         
         def find_perfect_region(region):
-            """查找完美区域"""
             g = region[:, 1].astype(np.int16)
             b = region[:, 2].astype(np.int16)
             r = region[:, 0].astype(np.int16)
@@ -94,42 +92,22 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
                 return y_start + indices[0], y_start + indices[-1]
             return None, None
         
-        def calc_wait_time(pos, speed, target_min, target_max):
+        def time_to_hit(pos, speed, target_y):
             """
-            计算指针到达完美区域需要的等待时间
-            pos: 当前指针位置
-            speed: 速度（正=向下，负=向上）
-            target_min: 完美区域上边界
-            target_max: 完美区域下边界
+            计算指针首次到达 target_y 所需时间，考虑 y_start~y_end 间往返运动
             """
-            # 指针移动方向：speed > 0 向下，speed < 0 向上
-            
             if speed > 0:
-                # 指针向下移动
-                if pos <= target_max:
-                    # 指针在完美区域上方或内部，可以直接到达
-                    if pos >= target_min:
-                        return 0  # 已经在完美区域内
-                    return (target_min - pos) / speed
+                if target_y >= pos:
+                    return (target_y - pos) / speed
                 else:
-                    # 指针已经过了完美区域，需要到底部再反向向上
-                    to_bottom = y_end - pos
-                    back_to_target = y_end - target_max
-                    return (to_bottom + back_to_target) / abs(speed)
+                    return (y_end - pos + y_end - target_y) / speed
             else:
-                # 指针向上移动
-                if pos >= target_min:
-                    # 指针在完美区域下方或内部，可以直接到达
-                    if pos <= target_max:
-                        return 0  # 已经在完美区域内
-                    return (pos - target_max) / abs(speed)
+                if target_y <= pos:
+                    return (pos - target_y) / abs(speed)
                 else:
-                    # 指针已经过了完美区域，需要到顶部再反向向下
-                    to_top = pos - y_start
-                    back_to_target = target_min - y_start
-                    return (to_top + back_to_target) / abs(speed)
+                    return (pos - y_start + target_y - y_start) / abs(speed)
         
-        logger.info('开始钓鱼循环（预测模式）')
+        logger.info('开始钓鱼循环（纯预测模式）')
         logger.info(f'监测区域: x={x}, y={y_start}-{y_end}')
         
         loop_count = 0
@@ -139,8 +117,7 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
             logger.info(f'=== 大循环 {loop_count} ===')
             
             # 步骤1：找完美区域
-            perfect_min = None
-            perfect_max = None
+            perfect_min = perfect_max = None
             while perfect_min is None:
                 img = self.screenshot()
                 region = img[y_start:y_end, x]
@@ -148,62 +125,73 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
                 if p_start is not None:
                     perfect_min, perfect_max = p_start, p_end
                     perfect_center = (p_start + p_end) / 2
-                    logger.info(f'✓ 完美区域: {p_start}-{p_end}, 中心: {perfect_center}')
+                    logger.info(f'✓ 完美区域: {p_start}-{p_end}, 中心: {perfect_center:.1f}')
                 else:
                     time.sleep(0.01)
             
-            # 步骤2：计算速度 - 截取两个时间点
-            # 第一次截图
-            img1 = self.screenshot()
-            region1 = img1[y_start:y_end, x]
-            pos1 = find_needle(region1)
-            t1 = time.time()
+            # 步骤2：连续采样测速（用实际时间差）
+            samples = []
+            for _ in range(6):
+                img = self.screenshot()
+                now = time.time()
+                region = img[y_start:y_end, x]
+                pos = find_needle(region)
+                if pos is not None:
+                    samples.append((pos, now))
+                    if len(samples) >= 2:
+                        break
+                time.sleep(0.03)
             
-            if pos1 is None:
-                logger.info('第一次未找到指针，等待...')
-                time.sleep(0.05)
+            if len(samples) < 2:
+                logger.info('未找到指针，重试...')
                 continue
             
-            # 等待固定时间
-            wait_dt = 0.1
-            time.sleep(wait_dt)
+            # 继续采样到总跨度 >= 0.3s，保证速度精度
+            t_start = samples[0][1]
+            while len(samples) < 6:
+                now = time.time()
+                if now - t_start > 3.0:
+                    break
+                time.sleep(0.03)
+                img = self.screenshot()
+                now = time.time()
+                region = img[y_start:y_end, x]
+                pos = find_needle(region)
+                if pos is not None:
+                    samples.append((pos, now))
             
-            # 第二次截图
-            img2 = self.screenshot()
-            region2 = img2[y_start:y_end, x]
-            pos2 = find_needle(region2)
-            t2 = time.time()
-            
-            if pos2 is None:
-                logger.info('第二次未找到指针，等待...')
-                time.sleep(0.05)
-                continue
-            
-            # 使用固定等待时间计算速度（更准确）
-            # 因为t2-t1包含了截图耗时，而我们实际只等待了wait_dt
-            speed = (pos2 - pos1) / wait_dt
+            # 最小二乘法拟合速度（用实际时间差）
+            positions = np.array([s[0] for s in samples])
+            times = np.array([s[1] for s in samples])
+            speed = np.polyfit(times - times[0], positions, 1)[0]
             direction = "向上" if speed < 0 else "向下"
-            logger.info(f'指针位置: {pos1} -> {pos2}, 速度: {speed:.1f} px/s ({direction})')
+            logger.info(f'速度: {speed:.1f} px/s ({direction}), {len(samples)} 个样本, '
+                        f'跨度 {times[-1]-times[0]:.3f}s')
             
-            # 步骤3：计算到达完美区域需要的时间
-            # 使用pos1作为起点，因为速度是从pos1开始计算的
-            wait_time = calc_wait_time(pos1, speed, perfect_min, perfect_max)
+            # 如果速度异常小（指针已停或接近停止），跳过本轮
+            if abs(speed) < 10:
+                logger.info('速度异常小，等待...')
+                time.sleep(0.3)
+                continue
             
-            # 减去已经过去的时间（从pos1到现在）
-            elapsed = time.time() - t1
-            wait_time = max(0, wait_time - elapsed)
+            # 步骤3：计算等待时间并点击
+            last_pos, last_time = samples[-1]
+            hit_time = time_to_hit(last_pos, speed, perfect_center)
+            if hit_time >= 5.0:
+                logger.info(f'预测需要 {hit_time:.2f}s，超出 5s 限制，等下次机会')
+                time.sleep(0.5)
+                continue
             
-            if wait_time == 0:
-                logger.info('指针已在完美区域内或已到达，立即点击!')
-            else:
-                logger.info(f'等待时间: {wait_time:.3f}s (已过{elapsed:.3f}s)')
-                time.sleep(wait_time)
+            elapsed = time.time() - last_time
+            wait_time = max(0, hit_time - elapsed)
+            logger.info(f'等待 {wait_time:.3f}s (pos={last_pos}, target={perfect_center:.1f})')
+            time.sleep(wait_time)
             
             # 步骤4：点击
             logger.info(f'>>> 点击! (1173, 510)')
             self.device.click(1173, 510)
             
-            logger.info('点击完成，进入下一个大循环')
+            logger.info('点击完成')
             time.sleep(0.5)
 
 
