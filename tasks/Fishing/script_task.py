@@ -63,136 +63,177 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
         logger.info(f'区域图片已保存: {region_path}')
         
         return img
-    
+
+    def test_nemu_ipc_color(self):
+        logger.info('===== nemu_ipc 颜色采样测试 =====')
+        logger.info(f'当前截图方式: {self.config.script.device.screenshot_method}')
+
+        total_times = []
+        for i in range(10):
+            start = time.perf_counter()
+
+            img = self.device.screenshot_nemu_ipc()
+            h, w = img.shape[:2]
+
+            colors = []
+            for _ in range(10):
+                x = random.randint(0, w - 1)
+                y = random.randint(0, h - 1)
+                r, g, b = [int(v) for v in img[y, x]]
+                colors.append((x, y, r, g, b))
+
+            elapsed = (time.perf_counter() - start) * 1000
+            total_times.append(elapsed)
+
+            info = '  '.join([f'({x},{y}) RGB({r},{g},{b})' for x, y, r, g, b in colors])
+            logger.info(f'[{i+1:2d}] {elapsed:6.1f}ms | {info}')
+
+        avg = sum(total_times) / len(total_times)
+        logger.info(f'===== 完成: 平均 {avg:.1f}ms/次, 最短 {min(total_times):.1f}ms, 最长 {max(total_times):.1f}ms =====')
+
+    def test_window_color(self):
+        import ctypes
+        from win32gui import GetWindowDC, ReleaseDC, GetWindowRect
+
+        hwnd = 393554
+        logger.info('===== GDI GetPixel 窗口像素直接读取测试 =====')
+        logger.info(f'窗口句柄: {hwnd}')
+
+        rect = GetWindowRect(hwnd)
+        win_w = rect[2] - rect[0]
+        win_h = rect[3] - rect[1]
+        logger.info(f'窗口尺寸: {win_w}x{win_h}')
+
+        total_times = []
+        for i in range(10):
+            start = time.perf_counter()
+
+            hwndDc = GetWindowDC(hwnd)
+            colors = []
+            for _ in range(10):
+                x = random.randint(0, win_w - 1)
+                y = random.randint(0, win_h - 1)
+                cref = ctypes.windll.gdi32.GetPixel(hwndDc, x, y)
+                r = cref & 0xff
+                g = (cref >> 8) & 0xff
+                b = (cref >> 16) & 0xff
+                colors.append((x, y, r, g, b))
+            ReleaseDC(hwnd, hwndDc)
+
+            elapsed = (time.perf_counter() - start) * 1000
+            total_times.append(elapsed)
+
+            info = '  '.join([f'({x},{y}) RGB({r},{g},{b})' for x, y, r, g, b in colors])
+            logger.info(f'[{i+1:2d}] {elapsed:6.1f}ms | {info}')
+
+        avg = sum(total_times) / len(total_times)
+        logger.info(f'===== 完成: 平均 {avg:.1f}ms/次, 最短 {min(total_times):.1f}ms, 最长 {max(total_times):.1f}ms =====')
+
+    def find_needle_window(self):
+        import ctypes
+        import time
+        from win32gui import GetWindowDC, ReleaseDC
+
+        hwnd = 393554
+        target = (180, 254, 255)
+        thr = 20
+        logger.info('===== GDI 窗口找色 =====')
+        logger.info(f'区域 x=1014~1015 y=123~522  目标 #{target[0]:02x}{target[1]:02x}{target[2]:02x}')
+
+        img = self.device.screenshot_nemu_ipc()
+        from module.base.utils import save_image
+        from pathlib import Path
+        log_dir = Path('./log/fishing')
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = int(time.time() * 1000)
+        h, w = img.shape[:2]
+        save_image(img, str(log_dir / f'window_full_{ts}.png'))
+        region = img[123:523, 1014:1016]
+        save_image(region, str(log_dir / f'window_region_1014-1015_y123-522_{ts}.png'))
+        logger.info(f'截图已保存至 log/fishing/ (win_w={w}, win_h={h})')
+
+        while True:
+            start = time.perf_counter()
+
+            hwndDc = GetWindowDC(hwnd)
+            found = None
+            for x in range(1014, 1015):
+                for y in range(123, 523):
+                    cref = ctypes.windll.gdi32.GetPixel(hwndDc, x, y)
+                    r = cref & 0xff
+                    g = (cref >> 8) & 0xff
+                    b = (cref >> 16) & 0xff
+                    if max(r, target[0]) - min(r, target[0]) <= thr \
+                       and max(g, target[1]) - min(g, target[1]) <= thr \
+                       and max(b, target[2]) - min(b, target[2]) <= thr:
+                        found = (x, y)
+                        break
+                if found:
+                    break
+            ReleaseDC(hwnd, hwndDc)
+
+            elapsed = (time.perf_counter() - start) * 1000
+            if found:
+                logger.info(f'坐标 ({found[0]},{found[1]})  ({elapsed:.1f}ms)')
+            else:
+                logger.info(f'未找到  ({elapsed:.1f}ms)')
+
+            remain = 0.005 - (time.perf_counter() - start)
+            if remain > 0:
+                time.sleep(remain)
+
+    def find_needle_nemu_ipc(self):
+        import numpy as np
+        import time
+
+        logger.info('===== nemu_ipc 窗口找色 =====')
+        logger.info(f'区域 x=1014~1015 y=123~522  目标 (255,254,180) 硬匹配')
+
+        while True:
+            start = time.perf_counter()
+            img = self.device.screenshot_nemu_ipc()
+            crop = img[123:523, 1014:1016]
+            mask = np.all(crop == (180, 254, 255), axis=2)
+            matches = np.argwhere(mask)
+            found = None
+            if len(matches):
+                y, x = matches[0]
+                found = (1014 + x, 123 + y)
+            elapsed = (time.perf_counter() - start) * 1000
+            if found:
+                logger.info(f'坐标 ({found[0]},{found[1]})  ({elapsed:.2f}ms)')
+            else:
+                logger.info(f'未找到  ({elapsed:.2f}ms)')
+
     def run(self):
         import numpy as np
-        
-        x = 1014
-        y_start, y_end = 123, 522
-        
-        # 指针颜色 #b4feff -> RGB(180, 254, 255)
-        needle_color = np.array([180, 254, 255])
-        needle_threshold = 20
-        
-        def find_needle(region):
-            diff = np.abs(region.astype(np.int16) - needle_color)
-            mask = np.all(diff < needle_threshold, axis=1)
-            indices = np.where(mask)[0]
-            if len(indices) > 0:
-                return y_start + indices[0]
-            return None
-        
-        def find_perfect_region(region):
-            g = region[:, 1].astype(np.int16)
-            b = region[:, 2].astype(np.int16)
-            r = region[:, 0].astype(np.int16)
-            mask = (g > 225) & (r < 210) & (b < 165) & ((g - r) > 15) & ((g - b) > 60)
-            indices = np.where(mask)[0]
-            if len(indices) > 0:
-                return y_start + indices[0], y_start + indices[-1]
-            return None, None
-        
-        def time_to_hit(pos, speed, target_y):
-            """
-            计算指针首次到达 target_y 所需时间，考虑 y_start~y_end 间往返运动
-            """
-            if speed > 0:
-                if target_y >= pos:
-                    return (target_y - pos) / speed
-                else:
-                    return (y_end - pos + y_end - target_y) / speed
-            else:
-                if target_y <= pos:
-                    return (pos - target_y) / abs(speed)
-                else:
-                    return (pos - y_start + target_y - y_start) / abs(speed)
-        
-        logger.info('开始钓鱼循环（纯预测模式）')
-        logger.info(f'监测区域: x={x}, y={y_start}-{y_end}')
-        
-        loop_count = 0
-        
+
+        logger.info('开始钓鱼（nemu_ipc 轮询）')
+
         while True:
-            loop_count += 1
-            logger.info(f'=== 大循环 {loop_count} ===')
-            
-            # 步骤1：找完美区域
-            perfect_min = perfect_max = None
-            while perfect_min is None:
-                img = self.screenshot()
-                region = img[y_start:y_end, x]
-                p_start, p_end = find_perfect_region(region)
-                if p_start is not None:
-                    perfect_min, perfect_max = p_start, p_end
-                    perfect_center = (p_start + p_end) / 2
-                    logger.info(f'✓ 完美区域: {p_start}-{p_end}, 中心: {perfect_center:.1f}')
-                else:
-                    time.sleep(0.01)
-            
-            # 步骤2：连续采样测速（用实际时间差）
-            samples = []
-            for _ in range(6):
-                img = self.screenshot()
-                now = time.time()
-                region = img[y_start:y_end, x]
-                pos = find_needle(region)
-                if pos is not None:
-                    samples.append((pos, now))
-                    if len(samples) >= 2:
+            img = self.device.screenshot_nemu_ipc()
+            crop = img[123:523, 1014:1016]
+            g = crop[:, :, 1].astype(np.int16)
+            b = crop[:, :, 2].astype(np.int16)
+            r = crop[:, :, 0].astype(np.int16)
+            perfect = np.argwhere((g > 225) & (r < 210) & (b < 165) & ((g - r) > 15) & ((g - b) > 60))
+            if not len(perfect):
+                continue
+            p_start = 123 + perfect[0][0]
+            p_end = 123 + perfect[-1][0]
+            logger.info(f'完美区域: {p_start}-{p_end}')
+
+            while True:
+                img = self.device.screenshot_nemu_ipc()
+                needle = np.argwhere(np.all(img[123:523, 1014:1016] == (180, 254, 255), axis=2))
+                if len(needle):
+                    pos = 123 + needle[0][0]
+                    logger.info(f'指针位置: {pos}')
+                    if p_start +5 <= pos <= p_end +5:
+                        logger.info(f'命中! pos={pos}')
+                        self.device.click(1173, 510)
+                        time.sleep(1)
                         break
-                time.sleep(0.03)
-            
-            if len(samples) < 2:
-                logger.info('未找到指针，重试...')
-                continue
-            
-            # 继续采样到总跨度 >= 0.3s，保证速度精度
-            t_start = samples[0][1]
-            while len(samples) < 6:
-                now = time.time()
-                if now - t_start > 3.0:
-                    break
-                time.sleep(0.03)
-                img = self.screenshot()
-                now = time.time()
-                region = img[y_start:y_end, x]
-                pos = find_needle(region)
-                if pos is not None:
-                    samples.append((pos, now))
-            
-            # 最小二乘法拟合速度（用实际时间差）
-            positions = np.array([s[0] for s in samples])
-            times = np.array([s[1] for s in samples])
-            speed = np.polyfit(times - times[0], positions, 1)[0]
-            direction = "向上" if speed < 0 else "向下"
-            logger.info(f'速度: {speed:.1f} px/s ({direction}), {len(samples)} 个样本, '
-                        f'跨度 {times[-1]-times[0]:.3f}s')
-            
-            # 如果速度异常小（指针已停或接近停止），跳过本轮
-            if abs(speed) < 10:
-                logger.info('速度异常小，等待...')
-                time.sleep(0.3)
-                continue
-            
-            # 步骤3：计算等待时间并点击
-            last_pos, last_time = samples[-1]
-            hit_time = time_to_hit(last_pos, speed, perfect_center)
-            if hit_time >= 5.0:
-                logger.info(f'预测需要 {hit_time:.2f}s，超出 5s 限制，等下次机会')
-                time.sleep(0.5)
-                continue
-            
-            elapsed = time.time() - last_time
-            wait_time = max(0, hit_time - elapsed)
-            logger.info(f'等待 {wait_time:.3f}s (pos={last_pos}, target={perfect_center:.1f})')
-            time.sleep(wait_time)
-            
-            # 步骤4：点击
-            logger.info(f'>>> 点击! (1173, 510)')
-            self.device.click(1173, 510)
-            
-            logger.info('点击完成')
-            time.sleep(0.5)
 
 
 if __name__ == '__main__':
