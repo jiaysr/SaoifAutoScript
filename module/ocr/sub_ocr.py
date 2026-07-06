@@ -219,6 +219,9 @@ class Quantity(BaseCor):
     """
     def after_process(self, result):
         result = super().after_process(result)
+        if not result:
+            logger.warning(f'[{self.name}]: Empty OCR result')
+            return 0
         result = result.replace('I', '1').replace('D', '0').replace('S', '5')
         result = result.replace('B', '8').replace('？', '2').replace('?', '2').replace('d', '6')
         result = [char
@@ -229,6 +232,9 @@ class Quantity(BaseCor):
         if '/' in result:
             result_split = result.split('/')
             result = result_split[0]
+        if not result:
+            logger.warning(f'[{self.name}]: Empty result after filtering')
+            return 0
         result = cn2an.cn2an(result, 'smart')
 
         try:

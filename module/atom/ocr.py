@@ -65,22 +65,22 @@ if __name__ == "__main__":
     #                             keyword="", name="mall_resource_4")
     # O_MALL_RESOURCE_5 = RuleOcr(roi=(935, 11, 100, 37), area=(935, 11, 100, 37), mode="Quantity", method="Default",
     #                             keyword="", name="mall_resource_5")
-    # O_MALL_RESOURCE_6 = RuleOcr(roi=(1129, 6, 100, 41), area=(1129, 6, 100, 41), mode="Quantity", method="Default",
-    #                             keyword="", name="mall_resource_6")
+    O_MALL_RESOURCE_6 = RuleOcr(roi=(486,96,45,34), area=(486,96,59,34), mode="Single", method="Default",
+                                keyword="", name="mall_resource_6")
     # image = cv2.imread(r"E:\2025-01-16225353.png")
     # print(O_MALL_RESOURCE_5.ocr_quantity(image))
     from module.atom.image import RuleImage
-    image = cv2.imread(r"E:\Debug\MuMu-20260119-114931-173.png")
+    image = cv2.imread(r"E:\Debug\MuMu-20260628-180120-855.png")
 
-    I_SIDE_CHECK_SPECIAL = RuleImage(roi_front=(155,8,42,42), roi_back=(155,7,1115,90), threshold=0.7, method="Template matching", file="E:\Debug\\navbar_mall_sccales_check.png")
+    # I_SIDE_CHECK_SPECIAL = RuleImage(roi_front=(486,96,59,34), roi_back=(155,7,1115,90), threshold=0.7, method="Template matching", file="E:\Debug\MuMu-20260628-180120-855.png")
 
     #roi = I_SIDE_CHECK_SPECIAL.get_mall_resource_text_roi(image, threshold=0.7)
 
-    rule = I_SIDE_CHECK_SPECIAL.build_mall_resource_ocr(
-        image,
-        threshold=0.7,
-        name="mall_resource_1"
-    )
+    # rule = I_SIDE_CHECK_SPECIAL.build_mall_resource_ocr(
+    #     image,
+    #     threshold=0.7,
+    #     name="mall_resource_1"
+    # )
 
-    print(rule.ocr_quantity(image))
+    print(O_MALL_RESOURCE_6.ocr_single(image))
 

@@ -1,9 +1,12 @@
 # This Python file uses the following encoding: utf-8
 # @author runhey
 # github https://github.com/runhey
+import os
 import random
 import time
+import cv2
 from cached_property import cached_property
+from pydantic.v1.datetime_parse import time_expr
 
 from tasks.GameUi.game_ui import GameUi
 from tasks.GameUi.page import page_realm_raid, page_main
@@ -12,6 +15,7 @@ from tasks.ActivityShikigami.assets import ActivityShikigamiAssets
 from tasks.DemonEncounter.data.answer import Answer
 from tasks.Quiz.debug import Debugger, remove_symbols
 
+from tasks.Fishing.assets import FishingAssets
 from module.logger import logger
 from module.exception import TaskEnd
 from module.base.timer import Timer
@@ -25,7 +29,7 @@ class NoTicket(Exception):
     pass
 
 
-class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
+class ScriptTask(GameUi, FishingAssets, QuizAssets, ActivityShikigamiAssets, Debugger):
 
     def test(self):
         """测试方法：截图并保存区域图片"""
@@ -205,35 +209,136 @@ class ScriptTask(GameUi, QuizAssets, ActivityShikigamiAssets, Debugger):
             else:
                 logger.info(f'未找到  ({elapsed:.2f}ms)')
 
+    @staticmethod
+    def _parse_colors(data: str):
+        """解析多点比色字符串 'x|y|RRGGBB,...' 为 [(x,y,(R,G,B)), ...]"""
+        result = []
+        for part in data.split(','):
+            x_str, y_str, hex_str = part.split('|')
+            x, y = int(x_str), int(y_str)
+            r, g, b = int(hex_str[0:2], 16), int(hex_str[2:4], 16), int(hex_str[4:6], 16)
+            result.append((x, y, (r, g, b)))
+        return result
+
+    def _check_colors(self, img, points, tol=15):
+        """检查所有颜色点是否匹配，返回匹配数/总数
+        参考色为RGB，图像为BGR，对比时交换R/B通道"""
+        match = 0
+        for x, y, (r, g, b) in points:
+            pixel = img[y, x]
+            if abs(int(pixel[0]) - b) <= tol and abs(int(pixel[1]) - g) <= tol and abs(int(pixel[2]) - r) <= tol:
+                match += 1
+        return match, len(points)
+
+    def _dump_colors(self, img, points, label):
+        """打印每个点的实际颜色 vs 参考颜色"""
+        for x, y, (r, g, b) in points:
+            p = img[y, x]
+            logger.info(f'  {label} ({x},{y})  参考=({r:3d},{g:3d},{b:3d}) '
+                        f'实际=({int(p[0]):3d},{int(p[1]):3d},{int(p[2]):3d}) '
+                        f'差={abs(int(p[0])-r):2d},{abs(int(p[1])-g):2d},{abs(int(p[2])-b):2d}')
+
     def run(self):
         import numpy as np
 
-        logger.info('开始钓鱼（nemu_ipc 轮询）')
+        do1_pts = self._parse_colors(
+            "1182|485|CFCF00,1180|496|DEDD00,1179|508|B57536,1179|517|F3F307,"
+            "1178|530|FFFF02,1177|547|7B4826,1157|546|F7F74A,1155|549|F0F057,1205|548|C8B7A6"
+        )
+        do2_pts = self._parse_colors(
+            "1187|494|255C7D,1174|502|594430,1161|508|245C7C,1163|520|27657D,"
+            "1162|530|5D5C56,1163|539|376478,1183|538|296A7D,1195|536|4C6F77,1206|527|4C2A11,1211|512|1B5179"
+        )
+        do3_pts = self._parse_colors(
+            "1183|494|6D6D00,1182|509|502F16,1181|520|797901,1177|536|7F7F01,"
+            "1157|535|767602,1176|547|5F4A3D,1181|553|412716,1186|548|492F1E,1199|542|4C2B17"
+        )
+        do4_pts=self._parse_colors(
+            "1186|494|46B4F8,1168|515|51D4FB,1165|526|50CEFB,1165|538|D7E0E0,1178|538|57D3FA,1199|536|BA6532,1202|534|DDDDDD,1202|519|B1DCEB,1193|501|4EC8FB"
+        )
+        target_pts=self._parse_colors(
+            "499|108|FBF9F7,499|109|FBF9F7,499|113|FBF9F7,499|116|FBF9F7,"
+            "499|118|FBF9F7,499|119|FBF9F7,503|119|F9F7F7,505|118|3434DD,500|109|5C5CE1"
+        )
 
-        while True:
-            img = self.device.screenshot_nemu_ipc()
-            crop = img[123:523, 1014:1016]
-            g = crop[:, :, 1].astype(np.int16)
-            b = crop[:, :, 2].astype(np.int16)
-            r = crop[:, :, 0].astype(np.int16)
-            perfect = np.argwhere((g > 225) & (r < 210) & (b < 165) & ((g - r) > 15) & ((g - b) > 60))
-            if not len(perfect):
-                continue
-            p_start = 123 + perfect[0][0]
-            p_end = 123 + perfect[-1][0]
-            logger.info(f'完美区域: {p_start}-{p_end}')
+        success_count = 0
+        logger.info('=== 开始钓鱼 ===')
+        self.device.disable_stuck_detection()
 
-            while True:
-                img = self.device.screenshot_nemu_ipc()
-                needle = np.argwhere(np.all(img[123:523, 1014:1016] == (180, 254, 255), axis=2))
-                if len(needle):
-                    pos = 123 + needle[0][0]
-                    logger.info(f'指针位置: {pos}')
-                    if p_start +5 <= pos <= p_end +5:
-                        logger.info(f'命中! pos={pos}')
-                        self.device.click(1173, 510)
-                        time.sleep(1)
-                        break
+        self.screenshot()
+        logger.info('首帧颜色采样:')
+        self._dump_colors(self.device.image, do1_pts, 'DO1')
+        self._dump_colors(self.device.image, do2_pts, 'DO2')
+        self._dump_colors(self.device.image, do3_pts, 'DO3')
+        self._dump_colors(self.device.image, do4_pts, 'DO4')
+        self._dump_colors(self.device.image, target_pts, 'Target')
+
+        end_time = time.time() + 45
+        loop_count = 0
+        clone_skip = 0
+
+        while time.time() < end_time:
+            loop_count += 1
+            self.screenshot()
+            img = self.device.image
+
+            m1, n1 = self._check_colors(img, do1_pts)
+            m4, n4 = self._check_colors(img, do4_pts)
+            m3, n3 = self._check_colors(img, do3_pts)
+            mt, nt = self._check_colors(img, target_pts)
+            do1 = m1 >= n1 * 0.6
+            do4 = m4 >= n4 * 0.6
+            do3_matched = m3 >= n3 * 0.6
+            text_matched = mt >= nt * 0.6
+
+            if do1:
+                logger.info(f'点击开始')
+                self.device.click(1173, 510)
+
+            if do4:
+                logger.info(f'提竿')
+                self.device.click(1173, 510)
+
+            if text_matched and not do3_matched:
+                crop = img[123:523, 1014:1016]
+                g = crop[:, :, 1].astype(np.int16)
+                b = crop[:, :, 2].astype(np.int16)
+                r = crop[:, :, 0].astype(np.int16)
+                perfect = np.argwhere((g > 225) & (r < 210) & (b < 165) & ((g - r) > 15) & ((g - b) > 60))
+                if len(perfect):
+                    p_start = 123 + perfect[0][0]
+                    p_end = 123 + perfect[-1][0]
+                    logger.info(f'完美区域: {p_start}-{p_end}')
+                    needle_end = time.time() + 6
+                    while time.time() < needle_end:
+                        nd = np.argwhere(np.all(
+                            self.device.screenshot_nemu_ipc()[123:523, 1014:1016] == (180, 254, 255), axis=2))
+                        if len(nd):
+                            pos = 123 + nd[0][0]
+                            if p_start + 5 <= pos <= p_end + 5:
+                                logger.info(f'命中! pos={pos}')
+                                self.device.click(1173, 510)
+                                time.sleep(1)
+                                break
+                        time.sleep(0.005)
+
+            if not text_matched and do3_matched:
+                clone_skip += 1
+                if clone_skip >= 5:
+                    clone_skip = 0
+                    if os.path.exists(self.I_CLONE.file):
+                        self.device.image = img
+                        if self.appear(self.I_CLONE):
+                            logger.info(f'钓鱼成功! +1')
+                            self.appear_then_click(self.I_CLONE)
+                            success_count += 1
+                            logger.info(f'共钓鱼:{success_count}')
+                            end_time = time.time() + 45 
+                            time.sleep(1)
+
+            time.sleep(0.03)
+
+        logger.info(f'========== 结束，共钓鱼 {success_count} 次 ==========')
 
 
 if __name__ == '__main__':

@@ -1,11 +1,38 @@
 [
   {
-    "itemName": "name",
-    "roiFront": "87,5,267,43",
-    "roiBack": "363,8,100,100",
-    "mode": "Single",
-    "method": "Default",
-    "keyword": "",
-    "description": "Ocr-description"
+    "itemName": "do1",
+    "imageName": "Fishing_do1.png",
+    "roiFront": "1162,515,38,40",
+    "roiBack": "1147,493,71,67",
+    "method": "Template matching",
+    "threshold": 0.8,
+    "description": "开始"
+  },
+  {
+    "itemName": "do2",
+    "imageName": "Fishing_do2.png",
+    "roiFront": "1163,507,43,35",
+    "roiBack": "1142,489,85,69",
+    "method": "Template matching",
+    "threshold": 0.8,
+    "description": "等待上钩"
+  },
+  {
+    "itemName": "do3",
+    "imageName": "Fishing_do3.png",
+    "roiFront": "1169,513,28,31",
+    "roiBack": "1147,492,72,60",
+    "method": "Template matching",
+    "threshold": 0.8,
+    "description": "中间等待"
+  },
+  {
+    "itemName": "clone",
+    "imageName": "Fishing_clone.png",
+    "roiFront": "917,180,40,31",
+    "roiBack": "915,173,46,44",
+    "method": "Template matching",
+    "threshold": 0.8,
+    "description": "钓上来了，关闭按钮"
   }
 ]
